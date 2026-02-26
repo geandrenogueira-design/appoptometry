@@ -1,63 +1,78 @@
-// Netlify Function: secure per-user storage using Netlify Identity + Netlify Blobs
-// Endpoints:
-//   GET  /.netlify/functions/user-data  -> returns {schemaVersion, updatedAt, patients}
-//   POST /.netlify/functions/user-data  -> saves body and returns saved object
-
-import { getStore } from '@netlify/blobs';
-
-function json(statusCode, body){
-  return {
-    statusCode,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store'
-    },
-    body: JSON.stringify(body)
-  };
-}
-
-function getUserId(context){
-  // Netlify Functions provide Identity user in clientContext
-  const u = context?.clientContext?.user || context?.user || null;
-  // Typical fields: sub, email
-  const id = u?.sub || u?.id || u?.email || null;
-  return id ? String(id) : null;
-}
+// netlify/functions/user-data.js
 
 export default async (request, context) => {
-  const userId = getUserId(context);
-  if(!userId) return json(401, { error: 'Not authenticated' });
+  // Helpers de resposta
+  const json = (obj, status = 200, extraHeaders = {}) =>
+    new Response(JSON.stringify(obj), {
+      status,
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        ...extraHeaders,
+      },
+    });
 
-  const store = getStore('claudeopto');
-  const key = `users/${userId}/data.json`;
+  const noContent = (status = 204, extraHeaders = {}) =>
+    new Response(null, { status, headers: { ...extraHeaders } });
 
-  if(request.method === 'GET'){
-    const raw = await store.get(key, { type: 'json' });
-    if(!raw) return json(200, { schemaVersion: 1, updatedAt: 0, patients: [] });
-    return json(200, raw);
+  try {
+    // 1) Exigir login (Identity JWT)
+    const user = context?.user;
+    if (!user?.sub) {
+      return json({ error: "Unauthorized" }, 401);
+    }
+
+    // 2) Importar Blobs (se você estiver usando Blobs)
+    //    Obs: se isso falhar no deploy, o log vai mostrar "Cannot find package..."
+    const { getStore } = await import("@netlify/blobs");
+    const store = getStore("app-data");
+
+    const key = `users/${user.sub}/data.json`;
+
+    // 3) GET = puxar dados
+    if (request.method === "GET") {
+      const raw = await store.get(key, { type: "text" });
+      if (!raw) {
+        return json({ patients: [], updatedAt: 0, schemaVersion: 1 }, 200);
+      }
+      return new Response(raw, {
+        status: 200,
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      });
+    }
+
+    // 4) POST = salvar dados
+    if (request.method === "POST") {
+      const bodyText = await request.text();
+      if (!bodyText) return json({ error: "Empty body" }, 400);
+
+      // valida JSON
+      let parsed;
+      try {
+        parsed = JSON.parse(bodyText);
+      } catch {
+        return json({ error: "Invalid JSON" }, 400);
+      }
+
+      // garante campos mínimos
+      const payload = {
+        schemaVersion: parsed.schemaVersion ?? 1,
+        updatedAt: parsed.updatedAt ?? Date.now(),
+        patients: Array.isArray(parsed.patients) ? parsed.patients : [],
+      };
+
+      await store.set(key, JSON.stringify(payload));
+      return json({ ok: true, updatedAt: payload.updatedAt }, 200);
+    }
+
+    // 5) Outros métodos
+    return noContent(405, { Allow: "GET, POST" });
+  } catch (err) {
+    return json(
+      {
+        error: "Function crashed",
+        message: err?.message ?? String(err),
+      },
+      500
+    );
   }
-
-  if(request.method === 'POST'){
-    let body;
-    try{ body = await request.json(); }
-    catch(_){ return json(400, { error: 'Invalid JSON' }); }
-
-    // Minimal validation
-    const schemaVersion = Number(body?.schemaVersion || 1);
-    const updatedAt = Number(body?.updatedAt || Date.now());
-    const patients = Array.isArray(body?.patients) ? body.patients : [];
-
-    // Server-side stamp (helps debugging; UI still uses updatedAt for LWW)
-    const saved = {
-      schemaVersion: isFinite(schemaVersion) ? schemaVersion : 1,
-      updatedAt: isFinite(updatedAt) ? updatedAt : Date.now(),
-      serverUpdatedAt: Date.now(),
-      patients
-    };
-
-    await store.set(key, saved);
-    return json(200, saved);
-  }
-
-  return json(405, { error: 'Method not allowed' });
 };
