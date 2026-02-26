@@ -3077,76 +3077,77 @@ lines.push('------------------------------------------------------------');
 
   document.addEventListener('DOMContentLoaded', init);
 })();
-// ===== NETLIFY IDENTITY UI FIX (Login/Logout/Sync) =====
+// ===== NETLIFY IDENTITY BUTTONS FIX (robusto) =====
 (function () {
+  const $ = (sel) => document.querySelector(sel);
+
   function ni() {
     return window.netlifyIdentity;
   }
 
-  function getUser() {
-    try {
-      return ni()?.currentUser?.() || null;
-    } catch {
-      return null;
-    }
+  function user() {
+    try { return ni()?.currentUser?.() || null; } catch { return null; }
   }
 
-  function setBoxLoggedIn(isLoggedIn) {
-    // Ajuste os seletores abaixo se você usou outros IDs/classes
-    const box = document.querySelector("#syncBox") || document.querySelector("[data-sync-box]");
-    const btnLogin = document.querySelector("#btnLogin") || document.querySelector("[data-btn-login]");
-    const btnLogout = document.querySelector("#btnLogout") || document.querySelector("[data-btn-logout]");
-    const btnSync = document.querySelector("#btnSyncNow") || document.querySelector("[data-btn-sync]");
+  function render() {
+    const u = user();
+    const btnLogin = $("#btnLogin");
+    const btnSync = $("#btnSyncNow");
+    const btnLogout = $("#btnLogout");
+    const status = $("#syncStatus");
 
-    // Se você não tiver IDs, isso evita quebrar
-    if (btnLogin) btnLogin.style.display = isLoggedIn ? "none" : "inline-flex";
-    if (btnSync) btnSync.style.display = isLoggedIn ? "inline-flex" : "none";
-    if (btnLogout) btnLogout.style.display = isLoggedIn ? "inline-flex" : "none";
-
-    // opcional: texto de status
-    const status = document.querySelector("#syncStatus") || document.querySelector("[data-sync-status]");
-    if (status) status.textContent = isLoggedIn ? "Logado — pronto para sincronizar" : "Faça login para sincronizar";
+    if (btnLogin) btnLogin.style.display = u ? "none" : "inline-flex";
+    if (btnSync) btnSync.style.display = u ? "inline-flex" : "none";
+    if (btnLogout) btnLogout.style.display = u ? "inline-flex" : "none";
+    if (status) status.textContent = u ? `Logado: ${u.email || "usuário"}` : "Deslogado";
   }
 
-  function wireButtons() {
-    const btnLogin = document.querySelector("#btnLogin") || document.querySelector("[data-btn-login]");
-    const btnLogout = document.querySelector("#btnLogout") || document.querySelector("[data-btn-logout]");
+  function bind() {
+    const btnLogin = $("#btnLogin");
+    const btnLogout = $("#btnLogout");
 
     if (btnLogin) {
-      btnLogin.onclick = () => {
+      btnLogin.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
         ni()?.open?.("login");
-      };
+      }, true);
     }
+
     if (btnLogout) {
-      btnLogout.onclick = async () => {
+      btnLogout.addEventListener("click", async (e) => {
+        e.preventDefault(); e.stopPropagation();
         await ni()?.logout?.();
-      };
+      }, true);
+    }
+
+    // Se você já tem função de sync no seu ui.js, troque aqui para ela:
+    const btnSync = $("#btnSyncNow");
+    if (btnSync) {
+      btnSync.addEventListener("click", async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        // Chame a sua rotina de sincronização aqui:
+        if (window.syncNow) await window.syncNow();
+        else console.warn("syncNow() não encontrado. (ok se ainda não expôs)");
+      }, true);
     }
   }
 
   function boot() {
     if (!ni()) {
-      console.warn("Netlify Identity script não carregou (window.netlifyIdentity undefined).");
+      console.warn("netlifyIdentity não carregou.");
       return;
     }
 
-    // init e eventos
-    try {
-      ni().init();
-    } catch {}
+    try { ni().init(); } catch {}
 
-    wireButtons();
+    bind();
+    render();
 
-    // Estado inicial
-    setBoxLoggedIn(!!getUser());
-
-    // Eventos (o que estava faltando em 80% dos casos)
-    ni().on("init", (user) => setBoxLoggedIn(!!user));
-    ni().on("login", (user) => setBoxLoggedIn(!!user));
-    ni().on("logout", () => setBoxLoggedIn(false));
+    ni().on("init", () => render());
+    ni().on("login", () => render());
+    ni().on("logout", () => render());
   }
 
-  // Espera DOM + identity carregarem
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
   } else {
